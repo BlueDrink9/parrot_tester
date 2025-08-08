@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib.util
 import os
 import sys
 import json
@@ -197,6 +198,59 @@ Your folder naming is perfectly valid - this is just a technical constraint of t
 
     return f"{dot_prefix}.{target_module}"
 
+def generate_import_code(
+    file_path: str,
+    symbols: list[str],
+    fake_pkg: str | None = None,
+    indent: str = ""
+) -> str:
+    """
+    Generate Python code that imports a module from a file path, assigns the given symbols,
+    and supports relative imports even if the real path contains dashes.
+
+    :param file_path: Absolute path to the .py file to import
+    :param symbols: List of attribute names to import from that module
+    :param fake_pkg: Optional fake package name; defaults to parent directory's stem
+    :param indent: String to prepend to each line (e.g. '    ' for 4 spaces)
+    """
+    p = Path(file_path)
+    if fake_pkg is None:
+        fake_pkg = p.parent.stem
+
+    module_name = p.stem
+    assigns = "\n".join(f"{sym} = module.{sym}" for sym in symbols)
+
+    code = f'''import sys
+import importlib.util
+import importlib.machinery
+
+fake_pkg = "{fake_pkg}"
+spec = importlib.util.spec_from_file_location(
+    f"{{fake_pkg}}.{module_name}",
+    r"{file_path}"
+)
+module = importlib.util.module_from_spec(spec)
+module.__package__ = fake_pkg
+
+# Create fake package in sys.modules
+pkg_module = importlib.util.module_from_spec(
+    importlib.machinery.ModuleSpec(fake_pkg, loader=None)
+)
+pkg_module.__path__ = [r"{str(Path(file_path).parent)}"]
+sys.modules[fake_pkg] = pkg_module
+
+# Register submodule
+sys.modules[f"{{fake_pkg}}.{module_name}"] = module
+
+spec.loader.exec_module(module)
+
+{assigns}
+'''
+
+    # Apply indentation to all non-empty lines
+    return "\n".join(f"{indent}{line}" if line.strip() else line for line in code.splitlines())
+
+
 def generate_parrot_integration_hook(import_path: str, current_file: Path) -> bool:
     """
     Generate the parrot_integration_hook.py file.
@@ -211,17 +265,21 @@ def generate_parrot_integration_hook(import_path: str, current_file: Path) -> bo
 # while preserving the integrity of the original source.
 try:
     from talon import Context
-    from {import_path} import parrot_delegate
-    from .parrot_integration_wrapper import (
-        parrot_tester_wrap_parrot_integration,
-        parrot_tester_restore_parrot_integration
-    )
+    import importlib.util
+    import traceback
+{generate_import_code(import_path, ["parrot_delegate"], indent="    ")}
+
+{generate_import_code(target_dir / "parrot_integration_wrapper.py", [
+        "parrot_tester_wrap_parrot_integration",
+        "parrot_tester_restore_parrot_integration",
+    ], "parrot_tester", indent="    ")}
 
     ctx = Context()
 
     @ctx.action_class("user")
     class Actions:
         def parrot_tester_integration_ready():
+            print("Hook checks as initialised")
             return True
 
         def parrot_tester_wrap_parrot_integration():
@@ -229,8 +287,9 @@ try:
 
         def parrot_tester_restore_parrot_integration():
             parrot_tester_restore_parrot_integration(parrot_delegate)
-except ImportError:
-    pass
+except ImportError as e:
+    print("Error initialising hook: ", e)
+    print(traceback.format_exc())
 """
 
     hook_file.write_text(code)
