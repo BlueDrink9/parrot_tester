@@ -4,14 +4,24 @@ import os
 import sys
 import json
 import re
+import logging
 from talon_init import TALON_HOME
 
 DEBUG_PATH_DISCOVERY = False
 
-def extract_pattern_path_from_parrot_integration(parrot_integration_path: Path) -> str | None:
-    if DEBUG_PATH_DISCOVERY:
-        print(f"Parsing parrot_integration.py: {parrot_integration_path}")
+logger = logging.getLogger(__name__)
+if DEBUG_PATH_DISCOVERY:
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+handler.setFormatter(formatter)
+if not logger.hasHandlers():
+    logger.addHandler(handler)
 
+def extract_pattern_path_from_parrot_integration(parrot_integration_path: Path) -> str | None:
+    logger.debug(f"Parsing parrot_integration.py: {parrot_integration_path}")
     try:
         with parrot_integration_path.open("r", encoding="utf-8") as f:
             content = f.read()
@@ -20,34 +30,28 @@ def extract_pattern_path_from_parrot_integration(parrot_integration_path: Path) 
         pattern_path_match = re.search(r'^\s*pattern_path\s*=\s*str\(([^)]+)\)', content, re.MULTILINE)
         if pattern_path_match:
             path_expr = pattern_path_match.group(1).strip()
-            if DEBUG_PATH_DISCOVERY:
-                print(f"   Found pattern_path = str({path_expr})")
+            logger.debug(f"   Found pattern_path = str({path_expr})")
 
             # Look for PARROT_HOME definition
             parrot_home_match = re.search(r'^\s*PARROT_HOME\s*=\s*TALON_HOME\s*/\s*[\'"]?([^\'")\s]+)[\'"]?', content, re.MULTILINE)
             if parrot_home_match and 'PARROT_HOME' in path_expr:
                 parrot_subpath = parrot_home_match.group(1)
-                if DEBUG_PATH_DISCOVERY:
-                    print(f"   Found PARROT_HOME = TALON_HOME / '{parrot_subpath}'")
+                logger.debug(f"   Found PARROT_HOME = TALON_HOME / '{parrot_subpath}'")
                 full_path = TALON_HOME / parrot_subpath / "patterns.json"
-                if DEBUG_PATH_DISCOVERY:
-                    print(f"   Constructed path: {full_path}")
+                logger.debug(f"   Constructed path: {full_path}")
                 return str(full_path)
 
         # Alternative: look for direct pattern_path assignment
         direct_match = re.search(r'^\s*pattern_path\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
         if direct_match:
             path = direct_match.group(1)
-            if DEBUG_PATH_DISCOVERY:
-                print(f"   Found direct pattern_path = '{path}'")
+            logger.debug(f"   Found direct pattern_path = '{path}'")
             return path
 
-        if DEBUG_PATH_DISCOVERY:
-            print("   No pattern_path found in file")
+        logger.debug("   No pattern_path found in file")
 
     except Exception as e:
-        if DEBUG_PATH_DISCOVERY:
-            print(f"   Failed to parse: {e}")
+        logger.error(f"   Failed to parse: {e}")
 
     return None
 
@@ -61,104 +65,82 @@ def get_talon_user_path():
 def get_parrot_integration_path():
     """Get the path to the parrot_integration.py file."""
     talon_user_path = get_talon_user_path()
-    if DEBUG_PATH_DISCOVERY:
-        print(f"🔍 Searching for parrot_integration.py in: {talon_user_path}")
+    logger.debug(f"🔍 Searching for parrot_integration.py in: {talon_user_path}")
 
     matches = list(Path(talon_user_path).rglob("parrot_integration.py"))
 
-    if DEBUG_PATH_DISCOVERY:
-        if matches:
-            print(f"   Found {len(matches)} parrot_integration.py files:")
-            for i, path in enumerate(matches):
-                print(f"     {i+1}. {path}")
-        else:
-            print("   No parrot_integration.py files found")
+    if matches:
+        logger.debug(f"   Found {len(matches)} parrot_integration.py files:")
+        for i, path in enumerate(matches):
+            logger.debug(f"     {i+1}. {path}")
+    else:
+        logger.debug("   No parrot_integration.py files found")
 
     return matches[0] if matches else None
 
 def get_patterns_py_path():
     """Get the path to the patterns.json file using 3-stage fallback."""
 
-    if DEBUG_PATH_DISCOVERY:
-        print("Starting patterns.json discovery process...")
+    logger.debug("Starting patterns.json discovery process...")
 
     # Stage 1: Try to parse parrot_integration.py to extract pattern_path
-    if DEBUG_PATH_DISCOVERY:
-        print("Stage 1: Parsing parrot_integration.py")
+    logger.debug("Stage 1: Parsing parrot_integration.py")
     try:
         parrot_integration_path = get_parrot_integration_path()
         if parrot_integration_path:
-            if DEBUG_PATH_DISCOVERY:
-                print(f"   Using parrot_integration.py: {parrot_integration_path}")
+            logger.debug(f"   Using parrot_integration.py: {parrot_integration_path}")
             pattern_path = extract_pattern_path_from_parrot_integration(parrot_integration_path)
             if pattern_path:
                 path_obj = Path(pattern_path)
                 if path_obj.exists():
-                    if DEBUG_PATH_DISCOVERY:
-                        print(f"Stage 1 SUCCESS: {pattern_path}")
+                    logger.info(f"Stage 1 SUCCESS: {pattern_path}")
                     return path_obj
                 else:
-                    if DEBUG_PATH_DISCOVERY:
-                        print(f"Stage 1: Path doesn't exist: {pattern_path}")
+                    logger.debug(f"Stage 1: Path doesn't exist: {pattern_path}")
             else:
-                if DEBUG_PATH_DISCOVERY:
-                    print("Stage 1: No pattern_path extracted")
+                logger.debug("Stage 1: No pattern_path extracted")
         else:
-            if DEBUG_PATH_DISCOVERY:
-                print("Stage 1: No parrot_integration.py found")
+            logger.debug("Stage 1: No parrot_integration.py found")
     except Exception as e:
-        if DEBUG_PATH_DISCOVERY:
-            print(f"Stage 1 failed: {e}")
+        logger.error(f"Stage 1 failed: {e}")
 
     # Stage 2: Try common location /talon/parrot/patterns.json
-    if DEBUG_PATH_DISCOVERY:
-        print("Stage 2: Checking common parrot location")
+    logger.debug("Stage 2: Checking common parrot location")
     try:
         parrot_patterns_path = TALON_HOME / "parrot" / "patterns.json"
-        if DEBUG_PATH_DISCOVERY:
-            print(f"   Checking: {parrot_patterns_path}")
+        logger.debug(f"   Checking: {parrot_patterns_path}")
         if parrot_patterns_path.exists():
-            if DEBUG_PATH_DISCOVERY:
-                print(f"Stage 2 SUCCESS: {parrot_patterns_path}")
+            logger.info(f"Stage 2 SUCCESS: {parrot_patterns_path}")
             return parrot_patterns_path
         else:
-            if DEBUG_PATH_DISCOVERY:
-                print("Stage 2: File doesn't exist")
+            logger.debug("Stage 2: File doesn't exist")
     except Exception as e:
-        if DEBUG_PATH_DISCOVERY:
-            print(f"Stage 2 failed: {e}")
+        logger.error(f"Stage 2 failed: {e}")
 
     # Stage 3: Fall back to searching within talon user directory
-    if DEBUG_PATH_DISCOVERY:
-        print("Stage 3: Searching in user directory")
+    logger.debug("Stage 3: Searching in user directory")
     try:
         talon_user_path = get_talon_user_path()
-        if DEBUG_PATH_DISCOVERY:
-            print(f"   Searching in: {talon_user_path}")
+        logger.debug(f"   Searching in: {talon_user_path}")
         matches = list(Path(talon_user_path).rglob("patterns.json"))
 
-        if DEBUG_PATH_DISCOVERY:
-            if matches:
-                print(f"   Found {len(matches)} matches:")
-                for i, path in enumerate(matches):
-                    print(f"     {i+1}. {path}")
-            else:
-                print("   No matches found")
+        if matches:
+            logger.debug(f"   Found {len(matches)} matches:")
+            for i, path in enumerate(matches):
+                logger.debug(f"     {i+1}. {path}")
+        else:
+            logger.debug("   No matches found")
 
         if matches:
             chosen = matches[0]
-            if DEBUG_PATH_DISCOVERY:
-                print(f"Stage 3 SUCCESS: Using first match: {chosen}")
+            logger.info(f"Stage 3 SUCCESS: Using first match: {chosen}")
             return chosen
         else:
-            if DEBUG_PATH_DISCOVERY:
-                print("Stage 3: No patterns.json found in user directory")
+            logger.debug("Stage 3: No patterns.json found in user directory")
     except Exception as e:
-        if DEBUG_PATH_DISCOVERY:
-            print(f"Stage 3 failed: {e}")
+        logger.error(f"Stage 3 failed: {e}")
 
-    if DEBUG_PATH_DISCOVERY:
-        print("ALL STAGES FAILED: Could not find patterns.json")
+    logger.warning("ALL STAGES FAILED: Could not find patterns.json")
     return None
 
 def load_patterns(path: Path) -> dict:
@@ -167,7 +149,7 @@ def load_patterns(path: Path) -> dict:
             data = json.load(f)
         return data
     except Exception as e:
-        print(f"❌ Failed to load patterns from {path}: {e}")
+        logger.error(f"❌ Failed to load patterns from {path}: {e}")
         return {}
 
 def build_relative_import_path(current_file: Path, target_file: Path) -> str:
